@@ -133,6 +133,7 @@ void Slice::setRefPicList(PicList& picList)
 
 void Slice::disableWeights()
 {
+    // * 列表->参考帧数量->颜色通道
     for (int l = 0; l < 2; l++)
         for (int i = 0; i < MAX_NUM_REF; i++)
             for (int yuv = 0; yuv < 3; yuv++)

@@ -38,7 +38,7 @@ namespace X265_NS {
     class Scaler;
     class Reader;
 
-    class AbrEncoder
+    class AbrEncoder // * 调动多个编码器 (PassEncoder)
     {
     public:
         uint8_t           m_numEncodes;
@@ -64,7 +64,7 @@ namespace X265_NS {
 
     };
 
-    class PassEncoder : public Thread
+    class PassEncoder : public Thread // * 编码器
     {
     public:
 

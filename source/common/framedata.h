@@ -121,7 +121,7 @@ public:
     JobProvider*   m_jobProvider;
 
     CUDataMemPool  m_cuMemPool;
-    CUData*        m_picCTU;
+    CUData*        m_picCTU; // * 当前帧的每个CTU
 
     RPS*           m_spsrps;
     int            m_spsrpsIdx;

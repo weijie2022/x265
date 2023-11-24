@@ -121,7 +121,7 @@ Thread::~Thread()
         CloseHandle(thread);
 }
 
-#else /* POSIX / pthreads */
+#else /* POSIX / pthreads */ // * UNIX 标准
 
 static void *ThreadShim(void *opaque)
 {
@@ -135,7 +135,7 @@ static void *ThreadShim(void *opaque)
 
 bool Thread::start()
 {
-    if (pthread_create(&thread, NULL, ThreadShim, this))
+    if (pthread_create(&thread, NULL, ThreadShim, this)) // * 成功创建，返回0
     {
         thread = 0;
         return false;

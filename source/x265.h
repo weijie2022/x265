@@ -2230,6 +2230,7 @@ typedef struct x265_api
     const char*   version_str;
     const char*   build_info_str;
 
+    // * 函数指针，https://c.biancheng.net/view/228.html
     /* libx265 public API functions, documented above with x265_ prefixes */
     x265_param*   (*param_alloc)(void);
     void          (*param_free)(x265_param*);

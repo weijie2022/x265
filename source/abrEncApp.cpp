@@ -45,7 +45,7 @@ namespace X265_NS {
     // private namespace
 #define X265_INPUT_QUEUE_SIZE 250
 
-    AbrEncoder::AbrEncoder(CLIOptions cliopt[], uint8_t numEncodes, int &ret)
+    AbrEncoder::AbrEncoder(CLIOptions cliopt[], uint8_t numEncodes, int &ret) // * 开启多线程，编码出多段码流
     {
         m_numEncodes = numEncodes;
         m_numActiveEncodes.set(numEncodes);
@@ -74,7 +74,7 @@ namespace X265_NS {
             m_passEnc[pass]->startThreads();
     }
 
-    bool AbrEncoder::allocBuffers()
+    bool AbrEncoder::allocBuffers() // * 分配空间
     {
         m_inputPicBuffer = X265_MALLOC(x265_picture**, m_numEncodes);
         m_analysisBuffer = X265_MALLOC(x265_analysis_data*, m_numEncodes);
@@ -107,7 +107,7 @@ namespace X265_NS {
         return true;
     }
 
-    void AbrEncoder::destroy()
+    void AbrEncoder::destroy() // * 回收空间
     {
         x265_cleanup(); /* Free library singletons */
         for (uint8_t pass = 0; pass < m_numEncodes; pass++)
@@ -189,7 +189,7 @@ namespace X265_NS {
         * opening an encoder */
 
         if (m_param)
-            m_encoder = m_cliopt.api->encoder_open(m_param);
+            m_encoder = m_cliopt.api->encoder_open(m_param); // * 获取编码器api
         if (!m_encoder)
         {
             x265_log(NULL, X265_LOG_ERROR, "x265_encoder_open() failed for Enc, \n");
@@ -389,8 +389,7 @@ ret:
         return;
     }
 
-
-    bool PassEncoder::readPicture(x265_picture *dstPic)
+    bool PassEncoder::readPicture(x265_picture *dstPic) // * 读取待编码图片
     {
         /*Check and wait if there any input frames to read*/
         int ipread = m_parent->m_picReadCnt[m_id].get();
@@ -495,7 +494,7 @@ ret:
             return false;
     }
 
-    void PassEncoder::threadMain()
+    void PassEncoder::threadMain() // * 编码主函数
     {
         THREAD_NAME("PassEncoder", m_id);
 
@@ -585,11 +584,11 @@ ret:
                     m_cliopt.bDither = false;
             }
 
-            // main encoder loop
-            while (pic_in && !b_ctrl_c)
+            // * main encoder loop
+            while (pic_in && !b_ctrl_c) // * b_ctrl_c，<ctrl-c>终止程序
             {
                 pic_orig.poc = (m_param->bField && m_param->interlaceMode) ? inFrameCount * 2 : inFrameCount;
-                if (m_cliopt.qpfile)
+                if (m_cliopt.qpfile) // * 解析QP相关文件
                 {
                     if (!m_cliopt.parseQPFile(pic_orig))
                     {
@@ -599,7 +598,8 @@ ret:
                         m_cliopt.qpfile = NULL;
                     }
                 }
-
+                
+                // * 读取输入的待编码图片
                 if (m_cliopt.framesToBeEncoded && inFrameCount >= m_cliopt.framesToBeEncoded)
                     pic_in = NULL;
                 else if (readPicture(pic_in))
@@ -609,7 +609,7 @@ ret:
 
                 if (pic_in)
                 {
-                    if (pic_in->bitDepth > m_param->internalBitDepth && m_cliopt.bDither)
+                    if (pic_in->bitDepth > m_param->internalBitDepth && m_cliopt.bDither) // * bit深度大于8bit时的处理
                     {
                         x265_dither_image(pic_in, m_cliopt.input->getWidth(), m_cliopt.input->getHeight(), errorBuf, m_param->internalBitDepth);
                         pic_in->bitDepth = m_param->internalBitDepth;
@@ -617,6 +617,8 @@ ret:
                     /* Overwrite PTS */
                     pic_in->pts = pic_in->poc;
 
+                    // * 场模式。一帧图像分为顶场（所有奇数行）与底场（所有偶数行），二者独立编解码。
+                    // * 参考链接: https://blog.csdn.net/q315099997/article/details/51689626?spm=1001.2101.3001.6650.2&utm_medium=distribute.pc_relevant.none-task-blog-2%7Edefault%7ECTRLIST%7ERate-2-51689626-blog-104800012.235%5Ev38%5Epc_relevant_anti_vip&depth_1-utm_source=distribute.pc_relevant.none-task-blog-2%7Edefault%7ECTRLIST%7ERate-2-51689626-blog-104800012.235%5Ev38%5Epc_relevant_anti_vip&utm_relevant_index=5
                     // convert to field
                     if (m_param->bField && m_param->interlaceMode)
                     {
@@ -664,7 +666,7 @@ ret:
                         //    // Have to handle userData here
                         //}
 
-                        if (pic_in->framesize)
+                        if (pic_in->framesize) // * 拷贝两个场的数据
                         {
                             for (int i = 0; i < x265_cli_csps[pic_in->colorSpace].planes; i++)
                             {
@@ -705,6 +707,7 @@ ret:
                     }
                 }
 
+                // * 场模式下，进行两次编码，即inputPicNum为2。
                 for (int inputNum = 0; inputNum < inputPicNum; inputNum++)
                 {
                     x265_picture *picInput = NULL;
@@ -713,6 +716,9 @@ ret:
                     else
                         picInput = pic_in;
 
+                    // TODO 编码当前帧（或场）的入口
+                    // * encoder_encode是一个函数指针
+                    // ? 读入24帧后才开始编码
                     int numEncoded = api->encoder_encode(m_encoder, &p_nal, &nal, picInput, pic_recon);
 
                     int idx = (inFrameCount - 1) % m_parent->m_queueSize;
@@ -757,6 +763,7 @@ ret:
                 }
             }
 
+            // TODO 不太理解
             /* Flush the encoder */
             while (!b_ctrl_c)
             {
@@ -809,7 +816,7 @@ ret:
                 fprintf(stderr, "%*s\r", 80, " ");
 
         fail:
-
+            // * 编码完成的收尾工作
             delete reconPlay;
 
             api->encoder_get_stats(m_encoder, &stats, sizeof(stats));

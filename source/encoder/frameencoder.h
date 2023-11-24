@@ -67,6 +67,7 @@ struct StatisticLog
     }
 };
 
+// * 管理当前编码CTU行，并不涉及CTU行的数据
 /* manages the state of encoding one row of CTU blocks.  When
  * WPP is active, several rows will be simultaneously encoded. */
 struct CTURow

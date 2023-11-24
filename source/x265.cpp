@@ -268,6 +268,8 @@ int main(int argc, char **argv)
     get_argv_utf8(&argc, &argv);
 #endif
 
+    // * Adaptive Bitrate (ABR), 根据网络条件和设备性能的变化来自适应地调整视频的比特率。
+    // ? 需要编码出多段码流，每一段码流对应一个独立的编码器。
     uint8_t numEncodes = 1;
     FILE *abrConfig = NULL;
     bool isAbrLadder = checkAbrLadder(argc, argv, &abrConfig);
@@ -294,7 +296,9 @@ int main(int argc, char **argv)
 
     int ret = 0;
 
+    // * AbrEncoder构造函数中，会启动多线程，用PassEncoder以编码多段码流
     AbrEncoder* abrEnc = new AbrEncoder(cliopt, numEncodes, ret);
+    
     int threadsActive = abrEnc->m_numActiveEncodes.get();
     while (threadsActive)
     {
@@ -312,6 +316,7 @@ int main(int argc, char **argv)
         }
     }
 
+    // * 资源回收
     abrEnc->destroy();
     delete abrEnc;
 

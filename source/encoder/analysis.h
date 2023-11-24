@@ -80,9 +80,9 @@ public:
 
     struct ModeDepth
     {
-        Mode           pred[MAX_PRED_TYPES];
-        Mode*          bestMode;
-        Yuv            fencYuv;
+        Mode           pred[MAX_PRED_TYPES]; // * 当前深度有13种预测模式
+        Mode*          bestMode; // * 当前深度的最佳预测模式
+        Yuv            fencYuv; // * 待编码的原始帧
         CUDataMemPool  cuMemPool;
     };
 

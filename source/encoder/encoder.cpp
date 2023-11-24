@@ -1608,8 +1608,11 @@ int Encoder::encode(const x265_picture* pic_in, x265_picture* pic_out)
         m_exportedPic = NULL;
         m_dpb->recycleUnreferenced();
     }
+
+    // * 存在输入图像pic_in
     if ((pic_in && (!m_param->chunkEnd || (m_encodedFrameNum < m_param->chunkEnd))) || (m_param->bEnableFrameDuplication && !pic_in && (read < written)))
     {
+        // * 通过计算直方图的SAD值来检测场景切换
         if (m_param->bHistBasedSceneCut && pic_in)
         {
             x265_picture *pic = (x265_picture *) pic_in;
@@ -1628,7 +1631,7 @@ int Encoder::encode(const x265_picture* pic_in, x265_picture* pic_out)
                 findSceneCuts(pic, bdropFrame, maxUVSad, edgeSad, isMaxThres, isHardSC);
             }
         }
-
+        // * 是否开启帧复制功能 
         if ((m_param->bEnableFrameDuplication && !pic_in && (read < written)))
             dontRead = true;
         else
@@ -1651,7 +1654,7 @@ int Encoder::encode(const x265_picture* pic_in, x265_picture* pic_out)
                 return -1;
             }
         }
-
+        // * 启用帧复制功能
         if (m_param->bEnableFrameDuplication)
         {
             double psnrWeight = 0;
@@ -1723,14 +1726,14 @@ int Encoder::encode(const x265_picture* pic_in, x265_picture* pic_out)
         }
         else
             inputPic = pic_in;
-
+        // ? 准备输入帧inFrame
         Frame *inFrame;
         x265_param *p = (m_reconfigure || m_reconfigureRc) ? m_latestParam : m_param;
-        if (m_dpb->m_freeList.empty())
+        if (m_dpb->m_freeList.empty()) // * DPB为空
         {
             inFrame = new Frame;
             inFrame->m_encodeStartTime = x265_mdate();
-            if (inFrame->create(p, inputPic->quantOffsets))
+            if (inFrame->create(p, inputPic->quantOffsets)) // * DPB为空，创建一个新的帧对象
             {
                 /* the first PicYuv created is asked to generate the CU and block unit offset
                  * arrays which are then shared with all subsequent PicYuv (orig and recon) 
@@ -1775,7 +1778,7 @@ int Encoder::encode(const x265_picture* pic_in, x265_picture* pic_out)
                         inFrame->m_fencPic->m_picWidth, inFrame->m_fencPic->m_picHeight, 0);
                 }
             }
-            else
+            else // * 创建帧对象失败，销毁Frame对象并释放内存，返回-1表示失败
             {
                 m_aborted = true;
                 x265_log(m_param, X265_LOG_ERROR, "memory allocation failure, aborting encode\n");
@@ -1784,7 +1787,7 @@ int Encoder::encode(const x265_picture* pic_in, x265_picture* pic_out)
                 return -1;
             }
         }
-        else
+        else // * DPB非空，从DPB中获取一个对象
         {
             inFrame = m_dpb->m_freeList.popBack();
             inFrame->m_encodeStartTime = x265_mdate();
@@ -1984,7 +1987,7 @@ int Encoder::encode(const x265_picture* pic_in, x265_picture* pic_out)
         m_lookahead->m_filled = true;
     else
         m_lookahead->flush();
-
+    // * 获取一个线程，开启FrameEncoder
     FrameEncoder *curEncoder = m_frameEncoder[m_curEncoder];
     m_curEncoder = (m_curEncoder + 1) % m_param->frameNumThreads;
     int ret = 0;
@@ -2423,7 +2426,7 @@ int Encoder::encode(const x265_picture* pic_in, x265_picture* pic_out)
                 x265_alloc_analysis_data(m_param, analysis);
             }
             /* determine references, setup RPS, etc */
-            m_dpb->prepareEncode(frameEnc);
+            m_dpb->prepareEncode(frameEnc); // * 编码前的准备工作
             if (!!m_param->selectiveSAO)
             {
                 Slice* slice = frameEnc->m_encData->m_slice;
@@ -2453,7 +2456,7 @@ int Encoder::encode(const x265_picture* pic_in, x265_picture* pic_out)
                  calcRefreshInterval(frameEnc);
 
             /* Allow FrameEncoder::compressFrame() to start in the frame encoder thread */
-            if (!curEncoder->startCompressFrame(frameEnc))
+            if (!curEncoder->startCompressFrame(frameEnc)) // * 启动FrameEncoder线程
                 m_aborted = true;
         }
         else if (m_encodedFrameNum)

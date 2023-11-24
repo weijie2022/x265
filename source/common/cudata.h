@@ -21,6 +21,8 @@
  * For more information, contact us at license @ x265.com.
  *****************************************************************************/
 
+// * 参考链接: X265的CUData结构体: https://mp.weixin.qq.com/s/DIPdBDsI6mANAiaQSA__pg
+
 #ifndef X265_CUDATA_H
 #define X265_CUDATA_H
 
@@ -38,7 +40,7 @@ class Slice;
 struct TUEntropyCodingParameters;
 struct CUDataMemPool;
 
-enum PartSize
+enum PartSize // * PU划分类型
 {
     SIZE_2Nx2N, // symmetric motion partition,  2Nx2N
     SIZE_2NxN,  // symmetric motion partition,  2Nx N
@@ -51,7 +53,7 @@ enum PartSize
     NUM_SIZES
 };
 
-enum PredMode
+enum PredMode // * 预测类型
 {
     MODE_NONE  = 0,
     MODE_INTER = (1 << 0),
@@ -59,7 +61,7 @@ enum PredMode
     MODE_SKIP  = (1 << 2) | MODE_INTER
 };
 
-// motion vector predictor direction used in AMVP
+// motion vector predictor direction used in AMVP // * 5个空域，1个时域
 enum MVP_DIR
 {
     MD_LEFT = 0,    // MVP of left block
@@ -70,7 +72,7 @@ enum MVP_DIR
     MD_COLLOCATED   // MVP of temporal neighbour
 };
 
-struct CUGeom
+struct CUGeom // * CU的几何信息
 {
     enum {
         INTRA           = 1<<0, // CU is intra predicted
@@ -81,7 +83,7 @@ struct CUGeom
     };
     
     // (1 + 4 + 16 + 64) = 85.
-    enum { MAX_GEOMS = 85 };
+    enum { MAX_GEOMS = 85 }; // * 从64x64到8x8, 共有85种不同的四叉树
 
     uint32_t log2CUSize;    // Log of the CU size.
     uint32_t childOffset;   // offset of the first child CU from current CU
@@ -92,13 +94,13 @@ struct CUGeom
     uint32_t geomRecurId;   // Unique geom id from 0 to MAX_GEOMS - 1 for every depth
 };
 
-struct MVField
+struct MVField // * 运动信息，包括运动矢量MV和参考帧索引
 {
     MV  mv;
     int refIdx;
 };
 
-// Structure that keeps the neighbour's MV information.
+// Structure that keeps the neighbour's MV information. // * 相邻块的MV信息
 struct InterNeighbourMV
 {
     // Neighbour MV. The index represents the list.
@@ -121,10 +123,10 @@ struct InterNeighbourMV
 typedef void(*cucopy_t)(uint8_t* dst, uint8_t* src); // dst and src are aligned to MIN(size, 32)
 typedef void(*cubcast_t)(uint8_t* dst, uint8_t val); // dst is aligned to MIN(size, 32)
 
-// Partition count table, index represents partitioning mode.
+// * Partition count table, index represents partitioning mode.
 const uint32_t nbPartsTable[8] = { 1, 2, 2, 4, 2, 2, 2, 2 };
 
-// Partition table.
+// * Partition table.
 // First index is partitioning mode. Second index is partition index.
 // Third index is 0 for partition sizes, 1 for partition offsets. The 
 // sizes and offsets are encoded as two packed 4-bit values (X,Y). 
@@ -142,7 +144,7 @@ const uint32_t partTable[8][4][2] =
     { { 0x34, 0x00 }, { 0x14, 0x30 }, { 0x00, 0x00 }, { 0x00, 0x00 } }  // SIZE_nRx2N.
 };
 
-// Partition Address table.
+// * Partition Address table.
 // First index is partitioning mode. Second index is partition address.
 const uint32_t partAddrTable[8][4] =
 {
@@ -166,19 +168,21 @@ public:
 
     bool          m_vbvAffected;
 
-    FrameData*    m_encData;
-    const Slice*  m_slice;
+    FrameData*    m_encData; // * 当前帧的编码数据
+    const Slice*  m_slice; // * 当前 slice 的编码数据，只读
 
+    // * CU处理函数
     cucopy_t      m_partCopy;         // pointer to function that copies m_numPartitions elements
     cubcast_t     m_partSet;          // pointer to function that sets m_numPartitions elements
     cucopy_t      m_subPartCopy;      // pointer to function that copies m_numPartitions/4 elements, may be NULL
     cubcast_t     m_subPartSet;       // pointer to function that sets m_numPartitions/4 elements, may be NULL
 
-    uint32_t      m_cuAddr;           // address of CTU within the picture in raster order
-    uint32_t      m_absIdxInCTU;      // address of CU within its CTU in Z scan order
-    uint32_t      m_cuPelX;           // CU position within the picture, in pixels (X)
-    uint32_t      m_cuPelY;           // CU position within the picture, in pixels (Y)
-    uint32_t      m_numPartitions;    // maximum number of 4x4 partitions within this CU
+    // * CU位置信息
+    uint32_t      m_cuAddr;           // address of CTU within the picture in raster order // * 当前CU所在CTU在整帧图像中的光栅扫描（从左往右，从上往下）号
+    uint32_t      m_absIdxInCTU;      // address of CU within its CTU in Z scan order // * 当前CU在它所在CTU里面，Z扫描顺序下的相对位置，以4x4块为单位，由于一个CTU可以分成256个4x4块，所以取值范围是0~255
+    uint32_t      m_cuPelX;           // CU position within the picture, in pixels (X) // * 当前CU的左上角在整帧图像里的坐标x
+    uint32_t      m_cuPelY;           // CU position within the picture, in pixels (Y) // * 当前CU的左上角在整帧图像里的坐标y
+    uint32_t      m_numPartitions;    // maximum number of 4x4 partitions within this CU // * 当前CU里面可以划分的4x4块的数量
 
     uint32_t      m_chromaFormat;
     uint32_t      m_hChromaShift;
@@ -188,8 +192,11 @@ public:
     uint8_t      m_bFirstRowInSlice;
     uint8_t      m_bLastRowInSlice;
     uint8_t      m_bLastCuInSlice;
-
-    /* Per-part data, stored contiguously */
+    
+    /* Per-part data, stored contiguously */ 
+    // * Per-part是4x4大小
+    // * 因为CU可以被划分成不同的PU和TU，所以x265里面在CUData结构体中也保存了PU和TU相关的信息
+    // *（这里并没有没有将PU和TU的信息分开，放到单独的结构体内）。
     int8_t*       m_qp;               // array of QP values
     int8_t*       m_qpAnalysis;       // array of QP values for analysis reuse
     uint8_t*      m_log2CUSize;       // array of cu log2Size TODO: seems redundant to depth
@@ -197,8 +204,8 @@ public:
     uint8_t*      m_tqBypass;         // array of CU lossless flags
     int8_t*       m_refIdx[2];        // array of motion reference indices per list
     uint8_t*      m_cuDepth;          // array of depths
-    uint8_t*      m_predMode;         // array of prediction modes
-    uint8_t*      m_partSize;         // array of partition sizes
+    uint8_t*      m_predMode;         // array of prediction modes // * PredMode枚举
+    uint8_t*      m_partSize;         // array of partition sizes // * PartSize枚举
     uint8_t*      m_mergeFlag;        // array of merge flags
     uint8_t*      m_skipFlag[2];
     uint8_t*      m_interDir;         // array of inter directions
@@ -209,14 +216,16 @@ public:
     uint8_t*      m_chromaIntraDir;   // array of intra directions (chroma)
     enum { BytesPerPartition = 24 };  // combined sizeof() of all per-part data
 
-    sse_t*        m_distortion;
+    sse_t*        m_distortion; // * SSE失真
     coeff_t*      m_trCoeff[3];       // transformed coefficient buffer per plane
     int8_t        m_refTuDepth[NUM_TU_DEPTH];   // TU depth of CU at depths 0, 1 and 2
 
+    // * 运动信息
     MV*           m_mv[2];            // array of motion vectors per list
     MV*           m_mvd[2];           // array of coded motion vector deltas per list
     enum { TMVP_UNIT_MASK = 0xF0 };  // mask for mapping index to into a compressed (reference) MV field
 
+    // * 空域相邻信息
     const CUData* m_cuAboveLeft;      // pointer to above-left neighbor CTU
     const CUData* m_cuAboveRight;     // pointer to above-right neighbor CTU
     const CUData* m_cuAbove;          // pointer to above neighbor CTU

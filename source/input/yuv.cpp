@@ -52,7 +52,7 @@ YUVInput::YUVInput(InputFileInfo& info)
     threadActive = false;
     ifs = NULL;
 
-    uint32_t pixelbytes = depth > 8 ? 2 : 1;
+    uint32_t pixelbytes = depth > 8 ? 2 : 1; // * 内存对齐
     framesize = 0;
     for (int i = 0; i < x265_cli_csps[colorSpace].planes; i++)
     {
@@ -75,7 +75,7 @@ YUVInput::YUVInput(InputFileInfo& info)
     }
     else
         ifs = x265_fopen(info.filename, "rb");
-    if (ifs && !ferror(ifs))
+    if (ifs && !ferror(ifs)) // * 文件存在，激活线程
         threadActive = true;
     else
     {
@@ -87,7 +87,7 @@ YUVInput::YUVInput(InputFileInfo& info)
 
     for (uint32_t i = 0; i < QUEUE_SIZE; i++)
     {
-        buf[i] = X265_MALLOC(char, framesize);
+        buf[i] = X265_MALLOC(char, framesize); // * 以字节为单位，分配frame空间
         if (buf[i] == NULL)
         {
             x265_log(NULL, X265_LOG_ERROR, "yuv: buffer allocation failure, aborting\n");

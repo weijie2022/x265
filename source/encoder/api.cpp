@@ -407,6 +407,7 @@ int x265_encoder_reconfig_zone(x265_encoder* enc, x265_zone* zone_in)
     return 0;
 }
 
+// * 在PassEncoder::threadMain()中，以指针函数api->encoder_encode调用
 int x265_encoder_encode(x265_encoder *enc, x265_nal **pp_nal, uint32_t *pi_nal, x265_picture *pic_in, x265_picture *pic_out)
 {
     if (!enc)
@@ -581,7 +582,7 @@ fail:
         numEncoded = encoder->encode(pic_in, pic_out);
     }
     while ((numEncoded == 0 && !pic_in && encoder->m_numDelayedPic && !encoder->m_latestParam->forceFlush) && !encoder->m_externalFlush);
-    if (numEncoded)
+    if (numEncoded) // * 不为0，说明数据成功编码
         encoder->m_externalFlush = false;
 
     // do not allow reuse of these buffers for more than one picture. The

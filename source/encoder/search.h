@@ -97,6 +97,7 @@ struct MotionData
     }
 };
 
+// * 模式选择的统计信息（Intra和Inter共用）
 struct Mode
 {
     CUData     cu;

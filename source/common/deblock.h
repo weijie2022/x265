@@ -22,6 +22,8 @@
 * For more information, contact us at license @ x265.com.
 *****************************************************************************/
 
+// * 参考链接：x265之去块滤波代码实现：https://mp.weixin.qq.com/s/gmmsqaIkgFKoGHitWzmvkw
+
 #ifndef X265_DEBLOCK_H
 #define X265_DEBLOCK_H
 
@@ -36,9 +38,9 @@ struct CUGeom;
 class Deblock
 {
 public:
-    enum { EDGE_VER, EDGE_HOR };
+    enum { EDGE_VER, EDGE_HOR }; // * 垂直滤波，水平滤波
 
-    static void deblockCTU(const CUData* ctu, const CUGeom& cuGeom, int32_t dir);
+    static void deblockCTU(const CUData* ctu, const CUGeom& cuGeom, int32_t dir); // * 以CTU为单位进行滤波
 
 protected:
 

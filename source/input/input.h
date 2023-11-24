@@ -41,7 +41,7 @@ struct InputFileInfo
     /* possibly user-supplied, possibly read from file header */
     int width;
     int height;
-    int csp;
+    int csp; // * colorSpace
     int depth;
     int fpsNum;
     int fpsDenom;

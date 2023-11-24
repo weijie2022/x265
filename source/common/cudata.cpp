@@ -322,6 +322,7 @@ void CUData::initCTU(const Frame& frame, uint32_t cuAddr, int qp, uint32_t first
     memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
 }
 
+// * 初始化一个CU的子分区的各种参数和数据
 // initialize Sub partition
 void CUData::initSubCU(const CUData& ctu, const CUGeom& cuGeom, int qp)
 {

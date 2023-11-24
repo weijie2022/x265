@@ -253,11 +253,11 @@ protected:
     int                m_val;
 };
 
-#else /* POSIX / pthreads */
+#else /* POSIX / pthreads */ // * UNIX 标准
 
-typedef pthread_t ThreadHandle;
+typedef pthread_t ThreadHandle; // * pthread_t 线程标识符号
 
-class Lock
+class Lock // * 互斥锁 mutex，https://blog.csdn.net/zmxiangde_88/article/details/7998458
 {
 public:
 
@@ -286,7 +286,7 @@ protected:
     pthread_mutex_t handle;
 };
 
-class Event
+class Event // * https://www.cnblogs.com/yychuyu/p/13732262.html
 {
 public:
 
@@ -294,7 +294,7 @@ public:
     {
         m_counter = 0;
         if (pthread_mutex_init(&m_mutex, NULL) ||
-            pthread_cond_init(&m_cond, NULL))
+            pthread_cond_init(&m_cond, NULL)) // * init 成功，返回 0
         {
             x265_log(NULL, X265_LOG_ERROR, "fatal: unable to initialize conditional variable\n");
         }
@@ -313,7 +313,7 @@ public:
         /* blocking wait on conditional variable, mutex is atomically released
          * while blocked. When condition is signaled, mutex is re-acquired */
         while (!m_counter)
-            pthread_cond_wait(&m_cond, &m_mutex);
+            pthread_cond_wait(&m_cond, &m_mutex); // * 阻塞等待m_cond满足，释放m_mutex，当被唤醒（m_cond满足），重新申请m_mutex
 
         m_counter--;
         pthread_mutex_unlock(&m_mutex);
@@ -341,7 +341,7 @@ public:
             /* blocking wait on conditional variable, mutex is atomically released
              * while blocked. When condition is signaled, mutex is re-acquired.
              * ts is absolute time to stop waiting */
-            bTimedOut = pthread_cond_timedwait(&m_cond, &m_mutex, &ts) == ETIMEDOUT;
+            bTimedOut = pthread_cond_timedwait(&m_cond, &m_mutex, &ts) == ETIMEDOUT; // * 等待至绝对时间 ts
         }
         if (m_counter > 0)
         {
@@ -354,18 +354,18 @@ public:
 
     void trigger()
     {
-        pthread_mutex_lock(&m_mutex);
+        pthread_mutex_lock(&m_mutex); // ? 和wait()中的 pthread_mutex_lock 是否互相影响
         if (m_counter < UINT_MAX)
             m_counter++;
         /* Signal a single blocking thread */
-        pthread_cond_signal(&m_cond);
+        pthread_cond_signal(&m_cond); // * 唤醒至少一个阻塞在条件变量上的线程
         pthread_mutex_unlock(&m_mutex);
     }
 
 protected:
 
-    pthread_mutex_t m_mutex;
-    pthread_cond_t  m_cond;
+    pthread_mutex_t m_mutex; // * 互斥锁
+    pthread_cond_t  m_cond;  // * 条件锁
     uint32_t        m_counter;
 };
 
@@ -405,7 +405,7 @@ public:
 
     int get()
     {
-        pthread_mutex_lock(&m_mutex);
+        pthread_mutex_lock(&m_mutex); // * 当写在进行时，无法读取
         int ret = m_val;
         pthread_mutex_unlock(&m_mutex);
         return ret;

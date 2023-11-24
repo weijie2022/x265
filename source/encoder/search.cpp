@@ -760,6 +760,7 @@ void Search::residualTransformQuantIntra(Mode& mode, const CUGeom& cuGeom, uint3
     }
 }
 
+// * 将Intra结果拷贝到reconYuv，拷贝内容为重建值和变换系数（checkTransformSkip为True时，才有实际的变换系数）。
 void Search::extractIntraResultQT(CUData& cu, Yuv& reconYuv, uint32_t tuDepth, uint32_t absPartIdx)
 {
     uint32_t log2TrSize = cu.m_log2CUSize[0] - tuDepth;
@@ -777,7 +778,7 @@ void Search::extractIntraResultQT(CUData& cu, Yuv& reconYuv, uint32_t tuDepth, u
         // copy reconstruction
         m_rqt[qtLayer].reconQtYuv.copyPartToPartLuma(reconYuv, absPartIdx, log2TrSize);
     }
-    else
+    else // * size为2Nx2N
     {
         uint32_t qNumParts = 1 << (log2TrSize - 1 - LOG2_UNIT_SIZE) * 2;
         for (uint32_t qIdx = 0; qIdx < 4; ++qIdx, absPartIdx += qNumParts)
@@ -1243,16 +1244,22 @@ void Search::checkIntra(Mode& intraMode, const CUGeom& cuGeom, PartSize partSize
     uint32_t tuDepthRange[2];
     cu.getIntraTUQtDepthRange(tuDepthRange, 0);
 
+    // * 计算CU的失真。在给定CU时，会遍历PU划分与Intra模式，通过RDCost，找到最优的PU划分与Intra模式，返回失真。
     intraMode.initCosts();
+    
+    // TODO 确定该CU的Luma分量，该选用的PU划分和Intra模式，及其对应的失真。
     intraMode.lumaDistortion += estIntraPredQT(intraMode, cuGeom, tuDepthRange);
     if (m_csp != X265_CSP_I400)
     {
+        // TODO Chroma部分还未看
         intraMode.chromaDistortion += estIntraPredChromaQT(intraMode, cuGeom);
         intraMode.distortion += intraMode.lumaDistortion + intraMode.chromaDistortion;
     }
     else
         intraMode.distortion += intraMode.lumaDistortion;
     cu.m_distortion[0] = intraMode.distortion;
+    
+    // * 通过熵编码，计算编码所使用的比特数
     m_entropyCoder.resetBits();
     if (m_slice->m_pps->bTransquantBypassEnabled)
         m_entropyCoder.codeCUTransquantBypassFlag(cu.m_tqBypass[0]);
@@ -1274,6 +1281,8 @@ void Search::checkIntra(Mode& intraMode, const CUGeom& cuGeom, PartSize partSize
     m_entropyCoder.store(intraMode.contexts);
     intraMode.totalBits = m_entropyCoder.getNumberOfWrittenBits();
     intraMode.coeffBits = intraMode.totalBits - intraMode.mvBits - skipFlagBits;
+    
+    // ? 在哪使用
     const Yuv* fencYuv = intraMode.fencYuv;
     if (m_rdCost.m_psyRd)
         intraMode.psyEnergy = m_rdCost.psyCost(cuGeom.log2CUSize - 2, fencYuv->m_buf[0], fencYuv->m_size, intraMode.reconYuv.m_buf[0], intraMode.reconYuv.m_size);
@@ -1282,8 +1291,8 @@ void Search::checkIntra(Mode& intraMode, const CUGeom& cuGeom, PartSize partSize
 
     intraMode.resEnergy = primitives.cu[cuGeom.log2CUSize - 2].sse_pp(intraMode.fencYuv->m_buf[0], intraMode.fencYuv->m_size, intraMode.predYuv.m_buf[0], intraMode.predYuv.m_size);
 
-    updateModeCost(intraMode);
-    checkDQP(intraMode, cuGeom);
+    updateModeCost(intraMode); // * 更新该模式下的rdCost
+    checkDQP(intraMode, cuGeom); // ? delta QP
 }
 
 /* Note that this function does not save the best intra prediction, it must
@@ -1506,6 +1515,7 @@ void Search::encodeIntraInInter(Mode& intraMode, const CUGeom& cuGeom)
     checkDQP(intraMode, cuGeom);
 }
 
+// TODO 在CU固定时，遍历PU划分和Intra模式，找到最优的PU划分和Intra模式，并返回失真
 sse_t Search::estIntraPredQT(Mode &intraMode, const CUGeom& cuGeom, const uint32_t depthRange[2])
 {
     CUData& cu = intraMode.cu;
@@ -1514,35 +1524,39 @@ sse_t Search::estIntraPredQT(Mode &intraMode, const CUGeom& cuGeom, const uint32
     const Yuv* fencYuv = intraMode.fencYuv;
 
     uint32_t depth        = cuGeom.depth;
-    uint32_t initTuDepth  = cu.m_partSize[0] != SIZE_2Nx2N;
-    uint32_t numPU        = 1 << (2 * initTuDepth);
+    uint32_t initTuDepth  = cu.m_partSize[0] != SIZE_2Nx2N; // * 帧内预测的CU，可以进行2Nx2N和NxN两种PU划分模式
+    uint32_t numPU        = 1 << (2 * initTuDepth); // * PU数量（2Nx2N则有四个PU，NxN则有两个PU）
     uint32_t log2TrSize   = cuGeom.log2CUSize - initTuDepth;
     uint32_t tuSize       = 1 << log2TrSize;
     uint32_t qNumParts    = cuGeom.numPartitions >> 2;
     uint32_t sizeIdx      = log2TrSize - 2;
     uint32_t absPartIdx   = 0;
-    sse_t totalDistortion = 0;
+    sse_t totalDistortion = 0; // * 总失真（每个PU的失真和）
 
+    // * 不进行变换（可能会量化）
     int checkTransformSkip = m_slice->m_pps->bTransformSkipEnabled && !cu.m_tqBypass[0] && cu.m_partSize[0] != SIZE_2Nx2N;
 
-    // loop over partitions
+    // loop over partitions // * 由外部指定PU划分模式（cu.m_partSize[0]的值决定了PU划分模式。Intra模式下，仅有2Nx2N和NxN两种PU划分模式。）
     for (uint32_t puIdx = 0; puIdx < numPU; puIdx++, absPartIdx += qNumParts)
     {
         uint32_t bmode = 0;
 
+        // * 已指定Intra模式，无需进行搜索
         if (intraMode.cu.m_lumaIntraDir[puIdx] != (uint8_t)ALL_IDX)
             bmode = intraMode.cu.m_lumaIntraDir[puIdx];
+        // * 未指定Intra模式，需要在35个Intra模式中搜索最佳模式
         else
         {
             uint64_t candCostList[MAX_RD_INTRA_MODES];
             uint32_t rdModeList[MAX_RD_INTRA_MODES];
-            uint64_t bcost;
+            uint64_t bcost; // * 所有Intra模式中最小的cost
             int maxCandCount = 2 + m_param->rdLevel + ((depth + initTuDepth) >> 1);
 
+            // * MPM，通过粗略（速度较快）地遍历Intra模式，从35个Intra模式中，找到几个候选Intra模式。
             {
                 ProfileCUScope(intraMode.cu, intraAnalysisElapsedTime, countIntraAnalysis);
 
-                // Reference sample smoothing
+                // Reference sample smoothing // ! 平滑参考像素，基于所选的帧内模式和预测块大小来决定是否执行此操作。
                 IntraNeighbors intraNeighbors;
                 initIntraNeighbors(cu, absPartIdx, initTuDepth, true, &intraNeighbors);
                 initAdiPattern(cu, cuGeom, absPartIdx, intraNeighbors, ALL_IDX);
@@ -1565,27 +1579,29 @@ sse_t Search::estIntraPredQT(Mode &intraMode, const CUGeom& cuGeom, const uint32
                 uint32_t mpmModes[3];
                 uint32_t rbits = getIntraRemModeBits(cu, absPartIdx, mpmModes, mpms);
 
-                pixelcmp_t sa8d = primitives.cu[sizeIdx].sa8d;
-                uint64_t modeCosts[35];
+                pixelcmp_t sa8d = primitives.cu[sizeIdx].sa8d; // * 函数指针，计算sa8d
+                uint64_t modeCosts[35]; // * 记录每个Intra模式的cost
 
-                // DC
+                // ! 粗略地遍历35种Intra模式，不进行实际的编码
+                // * Intra DC，调用intra_pred_dc_c
                 primitives.cu[sizeIdx].intra_pred[DC_IDX](m_intraPred, scaleStride, intraNeighbourBuf[0], 0, (scaleTuSize <= 16));
+                // * 编码Intra索引号，或是编码MPM列表索引，耗费不同的bits
                 uint32_t bits = (mpms & ((uint64_t)1 << DC_IDX)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, DC_IDX) : rbits;
                 uint32_t sad = sa8d(fenc, scaleStride, m_intraPred, scaleStride) << costShift;
                 modeCosts[DC_IDX] = bcost = m_rdCost.calcRdSADCost(sad, bits);
 
-                // PLANAR
-                pixel* planar = intraNeighbourBuf[0];
+                // * Intra PLANAR，调用planar_pred_c
+                pixel* planar = intraNeighbourBuf[0]; // * 参考像素未滤波
                 if (tuSize >= 8 && tuSize <= 32)
-                    planar = intraNeighbourBuf[1];
+                    planar = intraNeighbourBuf[1]; // * 参考像素滤波
 
                 primitives.cu[sizeIdx].intra_pred[PLANAR_IDX](m_intraPred, scaleStride, planar, 0, 0);
                 bits = (mpms & ((uint64_t)1 << PLANAR_IDX)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, PLANAR_IDX) : rbits;
                 sad = sa8d(fenc, scaleStride, m_intraPred, scaleStride) << costShift;
                 modeCosts[PLANAR_IDX] = m_rdCost.calcRdSADCost(sad, bits);
-                COPY1_IF_LT(bcost, modeCosts[PLANAR_IDX]);
+                COPY1_IF_LT(bcost, modeCosts[PLANAR_IDX]); // * 等价于 bcost = min(bcost, modeCosts[PLANAR_IDX])
 
-                // angular predictions
+                // * Intra angular
                 if (primitives.cu[sizeIdx].intra_pred_allangs)
                 {
                     primitives.cu[sizeIdx].transpose(m_fencTransposed, fenc, scaleStride);
@@ -1601,6 +1617,7 @@ sse_t Search::estIntraPredQT(Mode &intraMode, const CUGeom& cuGeom, const uint32
                         COPY1_IF_LT(bcost, modeCosts[mode]);
                     }
                 }
+                // * Intra angular predictions，调用intra_pred_ang_c
                 else
                 {
                     for (int mode = 2; mode < 35; mode++)
@@ -1614,6 +1631,7 @@ sse_t Search::estIntraPredQT(Mode &intraMode, const CUGeom& cuGeom, const uint32
                     }
                 }
 
+                // * MPM：找到几个候选的Intra模式
                 /* Find the top maxCandCount candidate modes with cost within 25% of best
                 * or among the most probable modes. maxCandCount is derived from the
                 * rdLevel and depth. In general we want to try more modes at slower RD
@@ -1628,6 +1646,8 @@ sse_t Search::estIntraPredQT(Mode &intraMode, const CUGeom& cuGeom, const uint32
                         updateCandList(mode, modeCosts[mode], maxCandCount, rdModeList, candCostList);
             }
 
+            // ! 精细地遍历所有MPM中的模式
+            // * 简单的RDO：在不考虑TU的情况下，从候选Intra模式中，选出最好的Intra模式
             /* measure best candidates using simple RDO (no TU splits) */
             bcost = MAX_INT64;
             for (int i = 0; i < maxCandCount; i++)
@@ -1641,7 +1661,7 @@ sse_t Search::estIntraPredQT(Mode &intraMode, const CUGeom& cuGeom, const uint32
                 cu.setLumaIntraDirSubParts(rdModeList[i], absPartIdx, depth + initTuDepth);
 
                 Cost icosts;
-                if (checkTransformSkip)
+                if (checkTransformSkip) // * 跳过变换，自然没有TU划分
                     codeIntraLumaTSkip(intraMode, cuGeom, initTuDepth, absPartIdx, icosts);
                 else
                     codeIntraLumaQT(intraMode, cuGeom, initTuDepth, absPartIdx, false, icosts, depthRange);
@@ -1651,6 +1671,8 @@ sse_t Search::estIntraPredQT(Mode &intraMode, const CUGeom& cuGeom, const uint32
 
         ProfileCUScope(intraMode.cu, intraRDOElapsedTime[cuGeom.depth], countIntraRDO[cuGeom.depth]);
 
+        // * 在考虑TU的情况下，重新衡量最好的Intra模式，得到实际的Cost。
+        // * 对于intra predition，要确保PU大于等于TU（即TU不跨多个intra PU）。因此TU划分是在PU划分的基础上进行的。
         /* remeasure best mode, allowing TU splits */
         cu.setLumaIntraDirSubParts(bmode, absPartIdx, depth + initTuDepth);
         m_entropyCoder.load(m_rqt[depth].cur);
@@ -1659,12 +1681,13 @@ sse_t Search::estIntraPredQT(Mode &intraMode, const CUGeom& cuGeom, const uint32
         if (checkTransformSkip)
             codeIntraLumaTSkip(intraMode, cuGeom, initTuDepth, absPartIdx, icosts);
         else
-            codeIntraLumaQT(intraMode, cuGeom, initTuDepth, absPartIdx, true, icosts, depthRange);
+            codeIntraLumaQT(intraMode, cuGeom, initTuDepth, absPartIdx, true, icosts, depthRange); // * bAllowSplit为true
         totalDistortion += icosts.distortion;
 
+        // * 提取Intra结果到reconYuv
         extractIntraResultQT(cu, *reconYuv, initTuDepth, absPartIdx);
 
-        // set reconstruction for next intra prediction blocks
+        // set reconstruction for next intra prediction blocks // * 存储计算结果。
         if (puIdx != numPU - 1)
         {
             /* This has important implications for parallelism and RDO.  It is writing intermediate results into the

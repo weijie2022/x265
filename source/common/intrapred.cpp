@@ -50,6 +50,7 @@ void intraFilter(const pixel* samples, pixel* filtered) /* 1:2:1 filtering of le
     filtered[tuSize2 + tuSize2] = leftLast;
 }
 
+// * Intra DC模式只有一个值，边界会发生不连续，所以对p[0][0], p[x][0], p[0][y]均进行滤波。
 static void dcPredFilter(const pixel* above, const pixel* left, pixel* dst, intptr_t dststride, int size)
 {
     // boundary pixels processing
@@ -66,24 +67,28 @@ static void dcPredFilter(const pixel* above, const pixel* left, pixel* dst, intp
     }
 }
 
+// * 在Intra DC模式下，预测样本值用预测块左侧和上侧参考样本的平均值进行填充
 template<int width>
 void intra_pred_dc_c(pixel* dst, intptr_t dstStride, const pixel* srcPix, int /*dirMode*/, int bFilter)
 {
     int k, l;
-
+    // * 计算平均值
     int dcVal = width;
     for (int i = 0; i < width; i++)
         dcVal += srcPix[1 + i] + srcPix[2 * width + 1 + i];
 
     dcVal = dcVal / (width + width);
+    // * 预测块填充
     for (k = 0; k < width; k++)
         for (l = 0; l < width; l++)
             dst[k * dstStride + l] = (pixel)dcVal;
 
+    // * 为防止边界不连续性，DC模式需要进行后处理
     if (bFilter)
         dcPredFilter(srcPix + 1, srcPix + (2 * width + 1), dst, dstStride, width);
 }
 
+// * Intra Planar模式
 template<int log2Size>
 void planar_pred_c(pixel* dst, intptr_t dstStride, const pixel* srcPix, int /*dirMode*/, int /*bFilter*/)
 {
@@ -92,19 +97,24 @@ void planar_pred_c(pixel* dst, intptr_t dstStride, const pixel* srcPix, int /*di
     const pixel* above = srcPix + 1;
     const pixel* left  = srcPix + (2 * blkSize + 1);
 
+    // * 右上角参考样本作为所有水平滤波的右参考，左下角参考样本作为所有垂直操作的底部参考。
     pixel topRight = above[blkSize];
     pixel bottomLeft = left[blkSize];
+
+    // TODO 可以SIMD优化
     for (int y = 0; y < blkSize; y++)
         for (int x = 0; x < blkSize; x++)
             dst[y * dstStride + x] = (pixel) (((blkSize - 1 - x) * left[y] + (blkSize - 1 -y) * above[x] + (x + 1) * topRight + (y + 1) * bottomLeft + blkSize) >> (log2Size + 1));
 }
 
+// * Intra Angle模式
 template<int width>
 void intra_pred_ang_c(pixel* dst, intptr_t dstStride, const pixel *srcPix0, int dirMode, int bFilter)
 {
     int width2 = width << 1;
+    // * 水平模式，需要翻转为垂直模式，然后与垂直模式进行同样的处理
     // Flip the neighbours in the horizontal case.
-    int horMode = dirMode < 18;
+    int horMode = dirMode < 18; // * 模式2-17为水平模式
     pixel neighbourBuf[129];
     const pixel *srcPix = srcPix0;
 
@@ -123,18 +133,18 @@ void intra_pred_ang_c(pixel* dst, intptr_t dstStride, const pixel *srcPix0, int 
     const int8_t angleTable[17] = { -32, -26, -21, -17, -13, -9, -5, -2, 0, 2, 5, 9, 13, 17, 21, 26, 32 };
     const int16_t invAngleTable[8] = { 4096, 1638, 910, 630, 482, 390, 315, 256 };
 
-    // Get the prediction angle.
+    // Get the prediction angle. // * 由Intra模式索引，得到预测角度
     int angleOffset = horMode ? 10 - dirMode : dirMode - 26;
     int angle = angleTable[8 + angleOffset];
 
-    // Vertical Prediction.
+    // Vertical Prediction. // * 角度为0，Intra模式为26（垂直）或者10（水平）
     if (!angle)
     {
-        for (int y = 0; y < width; y++)
+        for (int y = 0; y < width; y++) // * 同方向拷贝
             for (int x = 0; x < width; x++)
                 dst[y * dstStride + x] = srcPix[1 + x];
 
-        if (bFilter)
+        if (bFilter) // * 为防止边界不连续性，模式26和10都需要进行后处理
         {
             int topLeft = srcPix[0], top = srcPix[1];
             for (int y = 0; y < width; y++)
@@ -148,7 +158,7 @@ void intra_pred_ang_c(pixel* dst, intptr_t dstStride, const pixel *srcPix0, int 
         const pixel *ref;
 
         // Use the projected left neighbours and the top neighbours.
-        if (angle < 0)
+        if (angle < 0) // * 角度小于0，需要进行投影
         {
             // Number of neighbours projected. 
             int nbProjected = -((width * angle) >> 5) - 1;
@@ -188,7 +198,7 @@ void intra_pred_ang_c(pixel* dst, intptr_t dstStride, const pixel *srcPix0, int 
         }
     }
 
-    // Flip for horizontal.
+    // Flip for horizontal. // * 翻转水平模式，以抵消先前翻转
     if (horMode)
     {
         for (int y = 0; y < width - 1; y++)

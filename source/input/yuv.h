@@ -52,9 +52,9 @@ protected:
     ThreadSafeInteger readCount;
 
     ThreadSafeInteger writeCount;
-    char* buf[QUEUE_SIZE];
+    char* buf[QUEUE_SIZE]; // ? buf 是参考图像列表吗
     FILE *ifs;
-    int guessFrameCount();
+    int guessFrameCount(); // * 未定义
     void threadMain();
 
     bool populateFrameQueue();

@@ -135,6 +135,7 @@ void Analysis::destroy()
     X265_FREE(cacheCost);
 }
 
+// * 编码CTU（默认大小为64x64）
 Mode& Analysis::compressCTU(CUData& ctu, Frame& frame, const CUGeom& cuGeom, const Entropy& initialContext)
 {
     m_slice = ctu.m_slice;
@@ -223,25 +224,28 @@ Mode& Analysis::compressCTU(CUData& ctu, Frame& frame, const CUGeom& cuGeom, con
     }
     ProfileCUScope(ctu, totalCTUTime, totalCTUs);
 
+    // * I帧进行帧内编码
     if (m_slice->m_sliceType == I_SLICE)
     {
-        x265_analysis_intra_data* intraDataCTU = m_frame->m_analysisData.intraData;
-        if (m_param->analysisLoadReuseLevel > 1)
+        x265_analysis_intra_data* intraDataCTU = m_frame->m_analysisData.intraData; // * 单帧的帧内分析数据
+        if (m_param->analysisLoadReuseLevel > 1) // ? 值越大，重用信息越多
         {
             memcpy(ctu.m_cuDepth, &intraDataCTU->depth[ctu.m_cuAddr * numPartition], sizeof(uint8_t) * numPartition);
             memcpy(ctu.m_lumaIntraDir, &intraDataCTU->modes[ctu.m_cuAddr * numPartition], sizeof(uint8_t) * numPartition);
             memcpy(ctu.m_partSize, &intraDataCTU->partSizes[ctu.m_cuAddr * numPartition], sizeof(char) * numPartition);
             memcpy(ctu.m_chromaIntraDir, &intraDataCTU->chromaModes[ctu.m_cuAddr * numPartition], sizeof(uint8_t) * numPartition);
         }
+        // TODO 递归调用compressIntraCU，深度优先的四叉树
         compressIntraCU(ctu, cuGeom, qp);
     }
+    // * B帧或P帧进行帧间预测
     else
     {
         bool bCopyAnalysis = ((m_param->analysisLoadReuseLevel == 10) || (m_param->bAnalysisType == AVC_INFO && m_param->analysisLoadReuseLevel >= 7 && ctu.m_numPartitions <= 16));
         bool bCompressInterCUrd0_4 = (m_param->bAnalysisType == AVC_INFO && m_param->analysisLoadReuseLevel >= 7 && m_param->rdLevel <= 4);
         bool bCompressInterCUrd5_6 = (m_param->bAnalysisType == AVC_INFO && m_param->analysisLoadReuseLevel >= 7 && m_param->rdLevel >= 5 && m_param->rdLevel <= 6);
         bCopyAnalysis = bCopyAnalysis || bCompressInterCUrd0_4 || bCompressInterCUrd5_6;
-
+        // ? 复制分析数据
         if (bCopyAnalysis)
         {
             x265_analysis_inter_data* interDataCTU = m_frame->m_analysisData.interData;
@@ -262,7 +266,7 @@ Mode& Analysis::compressCTU(CUData& ctu, Frame& frame, const CUGeom& cuGeom, con
             for (uint32_t i = 0; i < cuGeom.numPartitions; i++)
                 ctu.m_log2CUSize[i] = (uint8_t)m_param->maxLog2CUSize - ctu.m_cuDepth[i];
         }
-
+        // * 帧内预测
         if (m_param->bIntraRefresh && m_slice->m_sliceType == P_SLICE &&
             ctu.m_cuPelX / m_param->maxCUSize >= frame.m_encData->m_pir.pirStartCol
             && ctu.m_cuPelX / m_param->maxCUSize < frame.m_encData->m_pir.pirEndCol)
@@ -423,6 +427,7 @@ int32_t Analysis::loadTUDepth(CUGeom cuGeom, CUData parentCTU)
     return maxTUDepth;
 }
 
+// * 如果无损编码的RDcost小于有损编码的RDcost，当前的best mode就替换为无损编码的best mode
 void Analysis::tryLossless(const CUGeom& cuGeom)
 {
     ModeDepth& md = m_modeDepth[cuGeom.depth];
@@ -430,15 +435,15 @@ void Analysis::tryLossless(const CUGeom& cuGeom)
     if (!md.bestMode->distortion)
         /* already lossless */
         return;
-    else if (md.bestMode->cu.isIntra(0))
+    else if (md.bestMode->cu.isIntra(0)) // * 进行Intra模式的无损编码
     {
         md.pred[PRED_LOSSLESS].initCosts();
         md.pred[PRED_LOSSLESS].cu.initLosslessCU(md.bestMode->cu, cuGeom);
         PartSize size = (PartSize)md.pred[PRED_LOSSLESS].cu.m_partSize[0];
-        checkIntra(md.pred[PRED_LOSSLESS], cuGeom, size);
-        checkBestMode(md.pred[PRED_LOSSLESS], cuGeom.depth);
+        checkIntra(md.pred[PRED_LOSSLESS], cuGeom, size); // ? checkIntra如何判断进行无损编码还是有损编码
+        checkBestMode(md.pred[PRED_LOSSLESS], cuGeom.depth); // * 考虑到无损编码，更新best mode
     }
-    else
+    else // * 进行Inter模式的无损编码
     {
         md.pred[PRED_LOSSLESS].initCosts();
         md.pred[PRED_LOSSLESS].cu.initLosslessCU(md.bestMode->cu, cuGeom);
@@ -511,16 +516,20 @@ void Analysis::qprdRefine(const CUData& parentCTU, const CUGeom& cuGeom, int32_t
     md.bestMode->reconYuv.copyToPicYuv(*m_frame->m_reconPic, parentCTU.m_cuAddr, cuGeom.absPartIdx);
 }
 
+// * Intra模式下，编码CU
 uint64_t Analysis::compressIntraCU(const CUData& parentCTU, const CUGeom& cuGeom, int32_t qp)
 {
-    uint32_t depth = cuGeom.depth;
-    ModeDepth& md = m_modeDepth[depth];
-    md.bestMode = NULL;
+    uint32_t depth = cuGeom.depth; // * 相对于CTU的深度
+    ModeDepth& md = m_modeDepth[depth]; // * 当前深度的模式选择信息
+    md.bestMode = NULL; // * 当前深度的最佳模式
 
-    bool mightSplit = !(cuGeom.flags & CUGeom::LEAF);
-    bool mightNotSplit = !(cuGeom.flags & CUGeom::SPLIT_MANDATORY);
-
+    bool mightSplit = !(cuGeom.flags & CUGeom::LEAF); // * 当前CU不是叶子结点，这意味着搜索过程中将进行划分，实际上是否划分取决于RDO。
+    bool mightNotSplit = !(cuGeom.flags & CUGeom::SPLIT_MANDATORY); // * 当前CU没有被设置为强制划分
+    
+    // * 帧内优化等级不等于4，且确定了Intra模式
+    // TODO two pass 第一次预编码，第二次可以使用第一次的编码决策
     bool bAlreadyDecided = m_param->intraRefine != 4 && parentCTU.m_lumaIntraDir[cuGeom.absPartIdx] != (uint8_t)ALL_IDX && !(m_param->bAnalysisType == HEVC_INFO);
+    // ? 帧内优化等级不等于4，CU不越界（越界的CU，深度信息置为0）
     bool bDecidedDepth = m_param->intraRefine != 4 && parentCTU.m_cuDepth[cuGeom.absPartIdx] == depth;
     int split = 0;
     if (m_param->intraRefine && m_param->intraRefine != 4)
@@ -531,13 +540,18 @@ uint64_t Analysis::compressIntraCU(const CUData& parentCTU, const CUGeom& cuGeom
             bAlreadyDecided = false;
     }
 
+    // ! 计算块划分前的代价。
+    // * 如果当前CU强制划分，即mightNotSplit为False，则不用进行这一步，因为必定会划分当前块。
+    
+    // * 有确定的Intra模式集合时，直接使用该Intra模式，不根据RD cost进行全搜索。
     if (bAlreadyDecided)
     {
         if (bDecidedDepth && mightNotSplit)
         {
-            Mode& mode = md.pred[0];
+            Mode& mode = md.pred[0]; // * 初始化模式为PRED_MERGE（枚举为0）
             md.bestMode = &mode;
             mode.cu.initSubCU(parentCTU, cuGeom, qp);
+            // * 重用过去的Intra模式
             bool reuseModes = !((m_param->intraRefine == 3) ||
                                 (m_param->intraRefine == 2 && parentCTU.m_lumaIntraDir[cuGeom.absPartIdx] > DC_IDX));
             if (reuseModes)
@@ -545,6 +559,7 @@ uint64_t Analysis::compressIntraCU(const CUData& parentCTU, const CUGeom& cuGeom
                 memcpy(mode.cu.m_lumaIntraDir, parentCTU.m_lumaIntraDir + cuGeom.absPartIdx, cuGeom.numPartitions);
                 memcpy(mode.cu.m_chromaIntraDir, parentCTU.m_chromaIntraDir + cuGeom.absPartIdx, cuGeom.numPartitions);
             }
+            // TODO 如果resueMode，并不会全搜索Intra模式，而是计算指定Intra模式下的cost
             checkIntra(mode, cuGeom, (PartSize)parentCTU.m_partSize[cuGeom.absPartIdx]);
 
             if (m_bTryLossless)
@@ -554,12 +569,17 @@ uint64_t Analysis::compressIntraCU(const CUData& parentCTU, const CUGeom& cuGeom
                 addSplitFlagCost(*md.bestMode, cuGeom.depth);
         }
     }
+    // * 没有确定的Intra模式集合时，且CU大小不等于64x64，不强制划分的情况下，需要根据RD cost全搜索出最好的Intra模式。
+    // * Intra模式下，预测块为CU大小为4x4到32x32的正方形，64x64的CU块必须要划分，所以无需计算划分前的RD cost。
     else if (cuGeom.log2CUSize != MAX_LOG2_CU_SIZE && mightNotSplit)
     {
+        // * PU划分模式为2Nx2N时，查找最佳的Intra模式，得到best mode及其cost
         md.pred[PRED_INTRA].cu.initSubCU(parentCTU, cuGeom, qp);
+        // TODO 在Intra模式下，在PU为2Nx2N（不进行PU划分）情况下，遍历Intra模式，得到best mode及其cost
         checkIntra(md.pred[PRED_INTRA], cuGeom, SIZE_2Nx2N);
         checkBestMode(md.pred[PRED_INTRA], depth);
 
+        // * PU划分模式为NxN时（只有当CU为8x8大小时才会如此划分），查找最佳的Intra模式，得到best mode及其cost
         if (cuGeom.log2CUSize == 3 && m_slice->m_sps->quadtreeTULog2MinSize < 3)
         {
             md.pred[PRED_INTRA_NxN].cu.initSubCU(parentCTU, cuGeom, qp);
@@ -567,16 +587,22 @@ uint64_t Analysis::compressIntraCU(const CUData& parentCTU, const CUGeom& cuGeom
             checkBestMode(md.pred[PRED_INTRA_NxN], depth);
         }
 
+        // TODO 如果开启无损编码，则在没有编码损失的情况下，查找best mode及其cost。如果无损的best mode优于有损的best mode，则更新best mode。
         if (m_bTryLossless)
             tryLossless(cuGeom);
 
-        if (mightSplit)
+        if (mightSplit) // * 增加CU划分过程的RD cost
             addSplitFlagCost(*md.bestMode, cuGeom.depth);
     }
 
+    // * 如果当前CU是叶子节点，即CU的尺寸为8*8（HEVC标准规定），此时mightSplit已经是False，直接跳过该步骤，
+    // * 否则判断是否需要划分。
+    // * split为True，是因为一般的想法是尽量多试一试；bAlreadyDecided为False ，是因为决策模式没有确定， 
+    // * 也要多试一试；bDecidedDepth为False，是因为此时的父CU可能位于边界，需要进一步划分。
     // stop recursion if we reach the depth of previous analysis decision
     mightSplit &= !(bAlreadyDecided && bDecidedDepth) || split;
 
+    // ! 计算划分后的代价
     if (mightSplit)
     {
         Mode* splitPred = &md.pred[PRED_SPLIT];
@@ -589,20 +615,24 @@ uint64_t Analysis::compressIntraCU(const CUData& parentCTU, const CUGeom& cuGeom
         invalidateContexts(nextDepth);
         Entropy* nextContext = &m_rqt[depth].cur;
         int32_t nextQP = qp;
-        uint64_t curCost = 0;
-        int skipSplitCheck = 0;
+        uint64_t curCost = 0; // * 当前子CU的累计率失真损失，用于判断是否提前终止
+        int skipSplitCheck = 0; // * 是否提前终止的标识符
 
+        // * 四叉树划分，递归编码子CU
         for (uint32_t subPartIdx = 0; subPartIdx < 4; subPartIdx++)
         {
-            const CUGeom& childGeom = *(&cuGeom + cuGeom.childOffset + subPartIdx);
+            const CUGeom& childGeom = *(&cuGeom + cuGeom.childOffset + subPartIdx); // * 底层实现时，85个cuGeom连续分布
+            // * 如果子CU存在，且父CU没有越过帧的边界
             if (childGeom.flags & CUGeom::PRESENT)
             {
-                m_modeDepth[0].fencYuv.copyPartToYuv(nd.fencYuv, childGeom.absPartIdx);
+                m_modeDepth[0].fencYuv.copyPartToYuv(nd.fencYuv, childGeom.absPartIdx); // * 将64x64的CTU的部分YUV数据，复制到nd.fencYuv
                 m_rqt[nextDepth].cur.load(*nextContext);
 
+                // ?
                 if (m_slice->m_pps->bUseDQP && nextDepth <= m_slice->m_pps->maxCuDQPDepth)
                     nextQP = setLambdaFromQP(parentCTU, calculateQpforCuSize(parentCTU, childGeom));
 
+                // * 该模式下，若当前已编码的子CU的RD cost之和，高于父CU的RD cost，则直接退出，否则继续编码剩余的子CU。
                 if (m_param->bEnableSplitRdSkip)
                 {
                     curCost += compressIntraCU(parentCTU, childGeom, nextQP);
@@ -615,6 +645,7 @@ uint64_t Analysis::compressIntraCU(const CUData& parentCTU, const CUGeom& cuGeom
                 else
                     compressIntraCU(parentCTU, childGeom, nextQP);
 
+                // * 保存当前子CU
                 // Save best CU and pred data for this sub CU
                 splitCU->copyPartFrom(nd.bestMode->cu, childGeom, subPartIdx);
                 splitPred->addSubCosts(*nd.bestMode);
@@ -631,6 +662,7 @@ uint64_t Analysis::compressIntraCU(const CUData& parentCTU, const CUGeom& cuGeom
                     memset(parentCTU.m_cuDepth + childGeom.absPartIdx, 0, childGeom.numPartitions);
             }
         }
+        // * 如果计算子CU的RD cost之和时没有中途退出，比较划分当前CU与否的RD cost，更新best mode
         if (!skipSplitCheck)
         {
             nextContext->store(splitPred->contexts);
@@ -644,6 +676,8 @@ uint64_t Analysis::compressIntraCU(const CUData& parentCTU, const CUGeom& cuGeom
         }
     }
 
+    // * 保存并返回结果
+    // TODO 没咋细看
     if (m_param->bEnableRdRefine && depth <= m_slice->m_pps->maxCuDQPDepth)
     {
         int cuIdx = (cuGeom.childOffset - 1) / 3;
@@ -661,7 +695,7 @@ uint64_t Analysis::compressIntraCU(const CUData& parentCTU, const CUGeom& cuGeom
 
     /* Copy best data to encData CTU and recon */
     md.bestMode->cu.copyToPic(depth);
-    if (md.bestMode != &md.pred[PRED_SPLIT])
+    if (md.bestMode != &md.pred[PRED_SPLIT]) // * 如果该CU没有划分，则将该CU重建值拷贝到重建图像中
         md.bestMode->reconYuv.copyToPicYuv(*m_frame->m_reconPic, parentCTU.m_cuAddr, cuGeom.absPartIdx);
 
     return md.bestMode->rdCost;
@@ -1152,7 +1186,7 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
     uint32_t cuAddr = parentCTU.m_cuAddr;
     ModeDepth& md = m_modeDepth[depth];
 
-
+    // * 遍历预测方向和每个方向的参考帧数目，填充参考帧数据
     if (m_param->searchMethod == X265_SEA)
     {
         int numPredDir = m_slice->isInterP() ? 1 : 2;
@@ -1162,7 +1196,7 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
                 for (int planes = 0; planes < INTEGRAL_PLANE_NUM; planes++)
                     m_modeDepth[depth].fencYuv.m_integral[list][i][planes] = m_frame->m_encData->m_slice->m_refFrameList[list][i]->m_encData->m_meIntegral[planes] + offset;
     }
-
+    // * 用以存储重建图像
     PicYuv& reconPic = *m_frame->m_reconPic;
     SplitData splitCUData;
 
@@ -1302,6 +1336,9 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
                 }
             }
         }
+        // * 评估Merge/Skip模式
+        // * Merge模式，仅有MV列表的index和residual
+        // * Skip模式，仅有MV列表的index，没有residual（直接拷贝参考像素）
         /* Step 1. Evaluate Merge/Skip candidates for likely early-outs, if skip mode was not set above */
         if ((mightNotSplit && depth >= minDepth && !md.bestMode && !bCtuInfoCheck) || (m_param->bAnalysisType == AVC_INFO && m_param->analysisLoadReuseLevel == 7 && (m_modeFlag[0] || m_modeFlag[1])))
             /* TODO: Re-evaluate if analysis load/save still works */
@@ -1309,6 +1346,7 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
             /* Compute Merge Cost */
             md.pred[PRED_MERGE].cu.initSubCU(parentCTU, cuGeom, qp);
             md.pred[PRED_SKIP].cu.initSubCU(parentCTU, cuGeom, qp);
+            // TODO RD为0~4时，查看Merge模式和Skip模式
             checkMerge2Nx2N_rd0_4(md.pred[PRED_SKIP], md.pred[PRED_MERGE], cuGeom);
             if (m_param->rdLevel)
                 skipModes = (m_param->bEnableEarlySkip || m_refineLevel == 2)
@@ -1335,6 +1373,7 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
         }
         if (m_param->bAnalysisType == AVC_INFO && md.bestMode && cuGeom.numPartitions <= 16 && m_param->analysisLoadReuseLevel == 7)
             skipRecursion = true;
+        // * 递归划分当前CU，并在子CU上调用compressInterCU_rd0_4
         /* Step 2. Evaluate each of the 4 split sub-blocks in series */
         if (mightSplit && !skipRecursion)
         {

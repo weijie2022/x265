@@ -74,11 +74,14 @@ bool Predict::allocBuffers(int csp)
     return m_predShortYuv[0].create(MAX_CU_SIZE, csp) && m_predShortYuv[1].create(MAX_CU_SIZE, csp);
 }
 
+// * 运动补偿
 void Predict::motionCompensation(const CUData& cu, const PredictionUnit& pu, Yuv& predYuv, bool bLuma, bool bChroma)
 {
+    // * 两个参考帧的索引
     int refIdx0 = cu.m_refIdx[0][pu.puAbsPartIdx];
     int refIdx1 = cu.m_refIdx[1][pu.puAbsPartIdx];
 
+    // * P帧
     if (cu.m_slice->isInterP())
     {
         /* P Slice */
@@ -91,6 +94,7 @@ void Predict::motionCompensation(const CUData& cu, const PredictionUnit& pu, Yuv
         MV mv0 = cu.m_mv[0][pu.puAbsPartIdx];
         cu.clipMv(mv0);
 
+        // * HEVC加权预测
         if (cu.m_slice->m_pps->bUseWeightPred && wp0->wtPresent)
         {
             for (int plane = 0; plane < (bChroma ? 3 : 1); plane++)
@@ -110,14 +114,18 @@ void Predict::motionCompensation(const CUData& cu, const PredictionUnit& pu, Yuv
 
             addWeightUni(pu, predYuv, shortYuv, wv0, bLuma, bChroma);
         }
+        // * 非加权预测
         else
         {
             if (bLuma)
+                // TODO 根据MV，获得Luma的预测值（将*cu.m_slice->m_refReconPicList[0][refIdx0]的值，拷贝到predYuv）
                 predInterLumaPixel(pu, predYuv, *cu.m_slice->m_refReconPicList[0][refIdx0], mv0);
             if (bChroma)
+                // * 根据MV，获取Chroma的预测值
                 predInterChromaPixel(pu, predYuv, *cu.m_slice->m_refReconPicList[0][refIdx0], mv0);
         }
     }
+    // * B帧
     else
     {
         /* B Slice */
@@ -243,25 +251,32 @@ void Predict::motionCompensation(const CUData& cu, const PredictionUnit& pu, Yuv
 }
 
 void Predict::predInterLumaPixel(const PredictionUnit& pu, Yuv& dstYuv, const PicYuv& refPic, const MV& mv) const
-{
+{   
+    // * 当前编码PU的地址
     pixel* dst = dstYuv.getLumaAddr(pu.puAbsPartIdx);
     intptr_t dstStride = dstYuv.m_size;
 
+    // * 参考帧中对应的PU的地址
     intptr_t srcStride = refPic.m_stride;
     intptr_t srcOffset = (mv.x >> 2) + (mv.y >> 2) * srcStride;
     int partEnum = partitionFromSizes(pu.width, pu.height);
     const pixel* src = refPic.getLumaAddr(pu.ctuAddr, pu.cuAbsPartIdx + pu.puAbsPartIdx) + srcOffset;
 
     int xFrac = mv.x & 3;
-    int yFrac = mv.y & 3;
+    int yFrac = mv.y & 3; 
 
     if (!(yFrac | xFrac))
+        // * 直接拷贝块，blockcopy_pp_c
         primitives.pu[partEnum].copy_pp(dst, dstStride, src, srcStride);
+    // ? 亚像素估计
     else if (!yFrac)
+        // * 水平插值
         primitives.pu[partEnum].luma_hpp(src, srcStride, dst, dstStride, xFrac);
     else if (!xFrac)
+        // * 垂直插值
         primitives.pu[partEnum].luma_vpp(src, srcStride, dst, dstStride, yFrac);
     else
+        // * 两方向均插值
         primitives.pu[partEnum].luma_hvpp(src, srcStride, dst, dstStride, xFrac, yFrac);
 }
 

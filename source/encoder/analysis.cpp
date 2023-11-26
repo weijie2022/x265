@@ -266,7 +266,7 @@ Mode& Analysis::compressCTU(CUData& ctu, Frame& frame, const CUGeom& cuGeom, con
             for (uint32_t i = 0; i < cuGeom.numPartitions; i++)
                 ctu.m_log2CUSize[i] = (uint8_t)m_param->maxLog2CUSize - ctu.m_cuDepth[i];
         }
-        // * 帧内预测
+        // * 特定条件下，进行帧内预测
         if (m_param->bIntraRefresh && m_slice->m_sliceType == P_SLICE &&
             ctu.m_cuPelX / m_param->maxCUSize >= frame.m_encData->m_pir.pirStartCol
             && ctu.m_cuPelX / m_param->maxCUSize < frame.m_encData->m_pir.pirEndCol)
@@ -1186,7 +1186,7 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
     uint32_t cuAddr = parentCTU.m_cuAddr;
     ModeDepth& md = m_modeDepth[depth];
 
-    // * 遍历预测方向和每个方向的参考帧数目，填充参考帧数据
+    // ? 搜索方法为X265_SEA
     if (m_param->searchMethod == X265_SEA)
     {
         int numPredDir = m_slice->isInterP() ? 1 : 2;
@@ -1196,7 +1196,7 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
                 for (int planes = 0; planes < INTEGRAL_PLANE_NUM; planes++)
                     m_modeDepth[depth].fencYuv.m_integral[list][i][planes] = m_frame->m_encData->m_slice->m_refFrameList[list][i]->m_encData->m_meIntegral[planes] + offset;
     }
-    // * 用以存储重建图像
+
     PicYuv& reconPic = *m_frame->m_reconPic;
     SplitData splitCUData;
 
@@ -1207,12 +1207,12 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
     if (bHEVCBlockAnalysis || bRefineAVCAnalysis || bNooffloading)
     {
         md.bestMode = NULL;
-        bool mightSplit = !(cuGeom.flags & CUGeom::LEAF);
-        bool mightNotSplit = !(cuGeom.flags & CUGeom::SPLIT_MANDATORY);
+        bool mightSplit = !(cuGeom.flags & CUGeom::LEAF); // * 当前CU不是叶子结点，这意味着搜索过程中将进行划分，实际上是否划分取决于RDO。
+        bool mightNotSplit = !(cuGeom.flags & CUGeom::SPLIT_MANDATORY); // * 当前CU没有被设置为强制划分
         uint32_t minDepth = topSkipMinDepth(parentCTU, cuGeom);
         bool bDecidedDepth = parentCTU.m_cuDepth[cuGeom.absPartIdx] == depth;
-        bool skipModes = false; /* Skip any remaining mode analyses at current depth */
-        bool skipRecursion = false; /* Skip recursion */
+        bool skipModes = false; /* Skip any remaining mode analyses at current depth */ // * 跳过当前深度下，没搜索的其他模式
+        bool skipRecursion = false; /* Skip recursion */ // * 跳出递归（不进一步划分四叉树）
         bool splitIntra = true;
         bool skipRectAmp = false;
         bool chooseMerge = false;
@@ -1337,8 +1337,8 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
             }
         }
         // * 评估Merge/Skip模式
-        // * Merge模式，仅有MV列表的index和residual
-        // * Skip模式，仅有MV列表的index，没有residual（直接拷贝参考像素）
+        // Merge模式，仅有MV列表的index和residual
+        // Skip模式，仅有MV列表的index，没有residual（直接拷贝参考像素）
         /* Step 1. Evaluate Merge/Skip candidates for likely early-outs, if skip mode was not set above */
         if ((mightNotSplit && depth >= minDepth && !md.bestMode && !bCtuInfoCheck) || (m_param->bAnalysisType == AVC_INFO && m_param->analysisLoadReuseLevel == 7 && (m_modeFlag[0] || m_modeFlag[1])))
             /* TODO: Re-evaluate if analysis load/save still works */
@@ -1348,6 +1348,7 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
             md.pred[PRED_SKIP].cu.initSubCU(parentCTU, cuGeom, qp);
             // TODO RD为0~4时，查看Merge模式和Skip模式
             checkMerge2Nx2N_rd0_4(md.pred[PRED_SKIP], md.pred[PRED_MERGE], cuGeom);
+            // * 判断是否要跳过其他模式
             if (m_param->rdLevel)
                 skipModes = (m_param->bEnableEarlySkip || m_refineLevel == 2)
                 && md.bestMode && md.bestMode->cu.isSkipped(0); // TODO: sa8d threshold per depth
@@ -1375,7 +1376,7 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
             skipRecursion = true;
         // * 递归划分当前CU，并在子CU上调用compressInterCU_rd0_4
         /* Step 2. Evaluate each of the 4 split sub-blocks in series */
-        if (mightSplit && !skipRecursion)
+        if (mightSplit && !skipRecursion) // * mightSplit表示可能划分（那么就要验证可能），skipRecursion表示跳过递归（也就是四叉树划分）
         {
             if (bCtuInfoCheck && m_param->bCTUInfo & 2)
                 qp = int((1 / 0.96) * qp + 0.5);
@@ -1390,7 +1391,7 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
             Entropy* nextContext = &m_rqt[depth].cur;
             int nextQP = qp;
             splitIntra = false;
-
+            // * 递归4个子CU
             for (uint32_t subPartIdx = 0; subPartIdx < 4; subPartIdx++)
             {
                 const CUGeom& childGeom = *(&cuGeom + cuGeom.childOffset + subPartIdx);
@@ -1402,6 +1403,7 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
                     if (m_slice->m_pps->bUseDQP && nextDepth <= m_slice->m_pps->maxCuDQPDepth)
                         nextQP = setLambdaFromQP(parentCTU, calculateQpforCuSize(parentCTU, childGeom));
 
+                    // * 在子CU上递归调用compressInterCU_rd0_4
                     splitData[subPartIdx] = compressInterCU_rd0_4(parentCTU, childGeom, nextQP);
 
                     // Save best CU and pred data for this sub CU
@@ -1446,6 +1448,7 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
          *   0  1
          *   2  3 */
         uint32_t allSplitRefs = splitData[0].splitRefs | splitData[1].splitRefs | splitData[2].splitRefs | splitData[3].splitRefs;
+        // * 运动估计
         /* Step 3. Evaluate ME (2Nx2N, rect, amp) and intra modes at current depth */
         if (mightNotSplit && (depth >= minDepth || (m_param->bCTUInfo && !md.bestMode)))
         {
@@ -2785,6 +2788,7 @@ void Analysis::trainCU(const CUData& ctu, const CUGeom& cuGeom, const Mode& best
     ctu.m_collectCUCount[offset]++;
 }
 
+// * PU为2Nx2N时，检查Merge模式
 /* sets md.bestMode if a valid merge candidate is found, else leaves it NULL */
 void Analysis::checkMerge2Nx2N_rd0_4(Mode& skip, Mode& merge, const CUGeom& cuGeom)
 {
@@ -2809,6 +2813,7 @@ void Analysis::checkMerge2Nx2N_rd0_4(Mode& skip, Mode& merge, const CUGeom& cuGe
     bestPred->cu.setPredModeSubParts(MODE_INTER);
     bestPred->cu.m_mergeFlag[0] = true;
 
+    // * 候选MV
     MVField candMvField[MRG_MAX_NUM_CANDS][2]; // double length for mv of both lists
     uint8_t candDir[MRG_MAX_NUM_CANDS];
     uint32_t numMergeCand = tempPred->cu.getInterMergeCandidates(0, 0, candMvField, candDir);
@@ -2823,6 +2828,7 @@ void Analysis::checkMerge2Nx2N_rd0_4(Mode& skip, Mode& merge, const CUGeom& cuGe
         safeX = m_slice->m_refFrameList[0][0]->m_encData->m_pir.pirEndCol * m_param->maxCUSize - 3;
         maxSafeMv = (safeX - tempPred->cu.m_cuPelX) * 4;
     }
+    // * 遍历候选MV，找到最好的MV
     for (uint32_t i = 0; i < numMergeCand; ++i)
     {
         if (m_bFrameParallel)
@@ -2851,6 +2857,7 @@ void Analysis::checkMerge2Nx2N_rd0_4(Mode& skip, Mode& merge, const CUGeom& cuGe
             // skip merge candidates which reference beyond safe reference area
             continue;
 
+        // * 初始化tempPred
         tempPred->cu.m_mvpIdx[0][0] = (uint8_t)i; // merge candidate ID is stored in L0 MVP idx
         X265_CHECK(m_slice->m_sliceType == B_SLICE || !(candDir[i] & 0x10), " invalid merge for P slice\n");
         tempPred->cu.m_interDir[0] = candDir[i];
@@ -2858,8 +2865,11 @@ void Analysis::checkMerge2Nx2N_rd0_4(Mode& skip, Mode& merge, const CUGeom& cuGe
         tempPred->cu.m_mv[1][0] = candMvField[i][1].mv;
         tempPred->cu.m_refIdx[0][0] = (int8_t)candMvField[i][0].refIdx;
         tempPred->cu.m_refIdx[1][0] = (int8_t)candMvField[i][1].refIdx;
+
+        // TODO 运动补偿
         motionCompensation(tempPred->cu, pu, tempPred->predYuv, true, m_bChromaSa8d && (m_csp != X265_CSP_I400 && m_frame->m_fencPic->m_picCsp != X265_CSP_I400));
 
+        // * 计算当前MV的RD cost，将最好的MV保存为bestPred
         tempPred->sa8dBits = getTUBits(i, numMergeCand);
         tempPred->distortion = primitives.cu[sizeIdx].sa8d(fencYuv->m_buf[0], fencYuv->m_size, tempPred->predYuv.m_buf[0], tempPred->predYuv.m_size);
         if (m_bChromaSa8d && (m_csp != X265_CSP_I400 && m_frame->m_fencPic->m_picCsp != X265_CSP_I400))
@@ -2869,21 +2879,23 @@ void Analysis::checkMerge2Nx2N_rd0_4(Mode& skip, Mode& merge, const CUGeom& cuGe
         }
         tempPred->sa8dCost = m_rdCost.calcRdSADCost((uint32_t)tempPred->distortion, tempPred->sa8dBits);
 
-        if (tempPred->sa8dCost < bestPred->sa8dCost)
+        if (tempPred->sa8dCost < bestPred->sa8dCost) // * 根据快速的RD cost，更新bestPred
         {
             bestSadCand = i;
             std::swap(tempPred, bestPred);
         }
     }
 
-    /* force mode decision to take inter or intra */
+    /* force mode decision to take inter or intra */ // * numMergeCand为0，才会返回
     if (bestSadCand < 0)
         return;
 
+    // * 若m_bChromaSa8d为0，说明在搜索最佳MV时，只考虑了Luma。因而在得到最佳MV后，要计算Chroma的运动估计。
     /* calculate the motion compensation for chroma for the best mode selected */
     if ((!m_bChromaSa8d && (m_csp != X265_CSP_I400)) || (m_frame->m_fencPic->m_picCsp == X265_CSP_I400 && m_csp != X265_CSP_I400)) /* Chroma MC was done above */
         motionCompensation(bestPred->cu, pu, bestPred->predYuv, false, true);
 
+    // * 若rdLevel不为0，则通过编码残差，计算实际的RD cost
     if (m_param->rdLevel)
     {
         if (m_param->bLossless)
@@ -2891,6 +2903,7 @@ void Analysis::checkMerge2Nx2N_rd0_4(Mode& skip, Mode& merge, const CUGeom& cuGe
         else
             encodeResAndCalcRdSkipCU(*bestPred);
 
+        // * 将bestPref拷贝到tempPred，并通过残差编码来计算实际的RD cost
         /* Encode with residual */
         tempPred->cu.m_mvpIdx[0][0] = (uint8_t)bestSadCand;
         tempPred->cu.setPUInterDir(candDir[bestSadCand], 0, 0);
@@ -2909,6 +2922,7 @@ void Analysis::checkMerge2Nx2N_rd0_4(Mode& skip, Mode& merge, const CUGeom& cuGe
     else
         md.bestMode = bestPred;
 
+    // * 记录最优模式的MV
     /* broadcast sets of MV field data */
     md.bestMode->cu.setPUInterDir(candDir[bestSadCand], 0, 0);
     md.bestMode->cu.setPUMv(0, candMvField[bestSadCand][0].mv, 0, 0);

@@ -2200,7 +2200,9 @@ void Search::searchMV(Mode& interMode, int list, int ref, MV& outmv, MV mvp[3], 
         }
     }
 }
+
 /* find the best inter prediction for each PU of specified mode */
+// * 比较merge模式代价、单向预测模式代价和双向预测模式代价，从而选取最优模式
 void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChromaMC, uint32_t refMasks[2])
 {
     ProfileCUScope(interMode.cu, motionEstimationElapsedTime, countMotionEstimate);
@@ -2212,7 +2214,7 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
     MV mvc[(MD_ABOVE_LEFT + 1) * 2 + 2];
 
     const Slice *slice = m_slice;
-    int numPart     = cu.getNumPartInter(0);
+    int numPart     = cu.getNumPartInter(0); // * 获取CU中的PU个数
     int numPredDir  = slice->isInterP() ? 1 : 2;
     const int* numRefIdx = slice->m_numRefIdx;
     uint32_t lastMode = 0;
@@ -2222,6 +2224,8 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
     MergeData merge;
     memset(&merge, 0, sizeof(merge));
     bool useAsMVP = false;
+    
+    // * 遍历每个PU
     for (int puIdx = 0; puIdx < numPart; puIdx++)
     {
         MotionData* bestME = interMode.bestME[puIdx];
@@ -2240,22 +2244,27 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
                 && (cu.m_cuDepth[0] == interDataCTU->depth[cuIdx]))
                 useAsMVP = true;
         }
+        
         /* find best cost merge candidate. note: 2Nx2N merge and bidir are handled as separate modes */
+        // * 获取Merge模式的RD
         uint32_t mrgCost = numPart == 1 ? MAX_UINT : mergeEstimation(cu, cuGeom, pu, puIdx, merge);
         bestME[0].cost = MAX_UINT;
         bestME[1].cost = MAX_UINT;
 
+        // * 获取块的比特数
         getBlkBits((PartSize)cu.m_partSize[0], slice->isInterP(), puIdx, lastMode, m_listSelBits);
         bool bDoUnidir = true;
 
+        // * 获取邻居块的MV
         cu.getNeighbourMV(puIdx, pu.puAbsPartIdx, interMode.interNeighbours);
-        /* Uni-directional prediction */
+        
+        /* Uni-directional prediction */ // * 单向预测
         if ((m_param->analysisLoadReuseLevel > 1 && m_param->analysisLoadReuseLevel != 10)
             || (m_param->analysisMultiPassRefine && m_param->rc.bStatRead) || (m_param->bAnalysisType == AVC_INFO) || (useAsMVP))
         {
             for (int list = 0; list < numPredDir; list++)
             {
-
+                // * 获取参考帧索引
                 int ref = -1;
                 if (useAsMVP)
                     ref = interDataCTU->refIdx[list][cuIdx + puIdx];
@@ -2265,9 +2274,12 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
                 {
                     continue;
                 }
+
+                // * 计算比特数
                 uint32_t bits = m_listSelBits[list] + MVP_IDX_BITS;
                 bits += getTUBits(ref, numRefIdx[list]);
-
+                
+                // * 选择最佳运动矢量预测（MVP）并获取MVP索引
                 int numMvc = cu.getPMV(interMode.interNeighbours, list, ref, interMode.amvpCand[list][ref], mvc);
                 const MV* amvp = interMode.amvpCand[list][ref];
                 int mvpIdx = selectMVP(cu, pu, amvp, list, ref);
@@ -2286,7 +2298,10 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
                     for (int planes = 0; planes < INTEGRAL_PLANE_NUM; planes++)
                         m_me.integral[planes] = interMode.fencYuv->m_integral[list][ref][planes] + puX * pu.width + puY * pu.height * m_slice->m_refFrameList[list][ref]->m_reconPic->m_stride;
                 }
+
+                // TODO 设置搜索范围
                 setSearchRange(cu, mvp, m_param->searchRange, mvmin, mvmax);
+                
                 MV mvpIn = mvp;
                 int satdCost;
                 if (m_param->analysisMultiPassRefine && m_param->rc.bStatRead && mvpIdx == bestME[list].mvpIdx)
@@ -2333,6 +2348,7 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
                 bits += m_me.bitcost(outmv);
                 uint32_t mvCost = m_me.mvcost(outmv);
                 uint32_t cost = (satdCost - mvCost) + m_rdCost.getCost(bits);
+                
                 /* Refine MVP selection, updates: mvpIdx, bits, cost */
                 if (!(m_param->analysisMultiPassRefine || useAsMVP))
                     mvp = checkBestMVP(amvp, outmv, mvpIdx, bits, cost);
@@ -2493,7 +2509,7 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
             }
         }
 
-        /* Bi-directional prediction */
+        /* Bi-directional prediction */ // TODO 双向预测（未看）
         MotionData bidir[2];
         uint32_t bidirCost = MAX_UINT;
         int bidirBits = 0;
@@ -2601,6 +2617,8 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
         }
 
         /* select best option and store into CU */
+        // * 选择最优的预测模式及其MV等信息
+        // * 选择merge模式
         if (mrgCost < bidirCost && mrgCost < bestME[0].cost && mrgCost < bestME[1].cost)
         {
             cu.m_mergeFlag[pu.puAbsPartIdx] = true;
@@ -2613,6 +2631,7 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
 
             totalmebits += merge.bits;
         }
+        // * 选择双向Inter
         else if (bidirCost < bestME[0].cost && bidirCost < bestME[1].cost)
         {
             lastMode = 2;
@@ -2631,6 +2650,7 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
 
             totalmebits += bidirBits;
         }
+        // * 选择单向Inter（参考前向）
         else if (bestME[0].cost <= bestME[1].cost)
         {
             lastMode = 0;
@@ -2647,6 +2667,7 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
 
             totalmebits += bestME[0].bits;
         }
+        // * 选择单向Inter（参考后向）
         else
         {
             lastMode = 1;
@@ -2664,6 +2685,7 @@ void Search::predInterSearch(Mode& interMode, const CUGeom& cuGeom, bool bChroma
             totalmebits += bestME[1].bits;
         }
 
+        // * 运动补偿
         motionCompensation(cu, pu, *predYuv, true, bChromaMC);
     }
     interMode.sa8dBits += totalmebits;
